@@ -1,209 +1,162 @@
+from itertools import product
 from flask import Blueprint, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 
-from app.apiauthhelper import token_required
+
+shop = Blueprint('shop', __name__, template_folder='shop_templates')
+
+from app.models import db, Product, Cart
 
 
-ig = Blueprint('ig', __name__, template_folder='ig_templates')
+@shop.route('/products')
+def allProducts():
+    products = Product.query.all()
+    return render_template('shop.html',products = products)
 
-from .forms import CreatePostForm, UpdatePostForm
-from app.models import db, Post, User
+@shop.route('/products/<int:product_id>')
+def individualProduct(product_id):
+    product = Product.query.filter_by(id=product_id).first()
+    if product is None:
+        return redirect(url_for('shop.allProducts'))
+    return render_template('individual_product.html', product = product)
 
+#Cart
 
-@ig.route('/posts')
-def posts():
-    posts = Post.query.all()[::-1]
-    return render_template('posts.html', posts = posts)
-
-@ig.route('/create-post', methods=["GET", "POST"])
+@shop.route('/cart')
 @login_required
-def createPost():
-    form = CreatePostForm()
-    if request.method == "POST":
-        if form.validate():
-            title = form.title.data
-            img_url = form.img_url.data
-            caption = form.caption.data
+def showCart():
+    cart = Cart.query.filter_by(user_id = current_user.id)
+    count = {}
+    for item in cart:
+        count[item.product_id] = count.get(item.product_id, 0) + 1
+    
+    cart_products = []
+    for product_id in count:
+        product_info = Product.query.filter_by(id=product_id).first().to_dict()
+        product_info["quantity"] = count[product_id]
+        product_info['subtotal'] = product_info['quantity'] * product_info['price']
+        cart_products.append(product_info)
+    return render_template('show_cart.html', cart = cart_products)
 
-            post = Post(title, img_url, caption, current_user.id)
 
-            db.session.add(post)
-            db.session.commit()   
-
-            return redirect(url_for('home'))         
-
-    return render_template('createpost.html', form = form)
-
-@ig.route('/posts/<int:post_id>')
-def individualPost(post_id):
-    post = Post.query.filter_by(id=post_id).first()
-    if post is None:
-        return redirect(url_for('ig.posts'))
-    return render_template('individual_post.html', post = post)
-
-@ig.route('/posts/update/<int:post_id>', methods=["GET","POST"])
+@shop.route('/cart/add/<int:product_id>')
 @login_required
-def updatePost(post_id):
-    post = Post.query.filter_by(id=post_id).first()
-    if post is None:
-        return redirect(url_for('ig.posts'))
-    if post.user_id != current_user.id:
-        return redirect(url_for('ig.posts'))
-    form = UpdatePostForm()
-    if request.method == "POST":
-        if form.validate():
-            title = form.title.data
-            img_url = form.img_url.data
-            caption = form.caption.data
-
-            # update the original post
-            post.title = title
-            post.image = img_url
-            post.caption = caption
-
-            db.session.commit()   
-
-            return redirect(url_for('home'))         
-    return render_template('updatepost.html', form=form, post = post)
-
-
-@ig.route('/posts/delete/<int:post_id>', methods=["POST"])
-@login_required
-def deletePost(post_id):
-    post = Post.query.filter_by(id=post_id).first()
-    if post is None:
-        return redirect(url_for('ig.posts'))
-    if post.user_id != current_user.id:
-        return redirect(url_for('ig.posts'))
-
-    db.session.delete(post)
+def addToCart(product_id):
+    cart_item = Cart(current_user.id, product_id)
+    db.session.add(cart_item)
     db.session.commit()
-               
-    return redirect(url_for('ig.posts'))
+    return redirect(url_for('shop.allProducts'))
 
-#API STARTS HERE
+#API CREATION
 
-@ig.route('/api/posts')
-def apiPosts():
-    posts = Post.query.all()[::-1]
+
+@shop.route('/api/products')
+def apiProducts():
+    products = Product.query.all()
     return {
-        'status' : 'ok',
-        'total_results' : len(posts),
-        'posts' : [ p.to_dict() for p in posts]
-        }
-
-
-@ig.route('/api/posts/<int:post_id>')
-def apiSinglePosts(post_id):
-    post = Post.query.filter_by(id=post_id).first()
-    if post is None:
-        return {
-            'status': 'not ok',
-            'total_results': 0,
-        }
-    return {
-        'status' : 'ok',
-        'total_results' : 1,
-        'post' : post.to_dict()
-        }
-
-
-#
-#
-#Proj Api
-#
-#
-
-
-
-@ig.route('/api/create-post', methods=["POST"])
-@token_required
-def apicreatePost(user):
-    if request.method == "POST":
-        data = request.json
-        title = data['title']
-        img_url = data['img_url']
-        caption = data['caption']
-        
-
-        post = Post(title, img_url, caption, user.id)
-
-        db.session.add(post)
-        db.session.commit()   
-
-        return {
-            'status': 'ok',
-            'message': 'Successfully created a new post',
-            'post' : post.to_dict()
-        }
-
-@ig.route('/api/posts/delete/<int:post_id>', methods=["POST"])
-# @login_required
-def apideletePost(post_id):
-    post = Post.query.filter_by(id=post_id).first()
-    if post is None:
-        return {
-            'status': 'not ok',
-            'total_results': 0,
-        }
-    if post.user_id != current_user.id:
-        return {
-            'status':'error',
-            'message':'the post does not match with the user id'
-        }
-
-    db.session.delete(post)
-    db.session.commit()
-               
-    return {
-        'status':'ok',
-        'message': 'this post has been deleted',
-        'post': post.to_dict()
-
+        'status': 'ok',
+        'total_results': len(products),
+        'products': [p.to_dict() for p in products]
     }
 
+@shop.route('/api/login', methods =["POST"])
+def apiLogin():
+    return 
 
-@ig.route('/api/posts/update/<int:post_id>', methods=["POST"])
+@shop.route('/api/products/<int:product_id>')
+def apiSingleProducts(product_id):
+    product = Product.query.filter_by(id=product_id).first()
+    if product is None:
+        return{
+            'status': 'not ok',
+            'total_results': 0,
+        }
+    return {
+        'status': 'ok',
+        'total_results': 1,
+        'product': product.to_dict()
+    }
+
+@shop.route('/api/cart/get')
+def getCart(user):
+    cart = Cart.query.filter_by(user_id = user.id)
+    myCart = [Product.query.filter_by(id = item.product_id).first().to_dict() for item in cart]
+    return {
+        'status': 'ok',
+        'cart': myCart
+    }
+## SHOP API ##
+##############
+
+
+@shop.route('/api/products/update/<int:product_id>', methods=["POST"])
 # @login_required
-def apiUpdatePost(post_id):
-    post = Post.query.filter_by(id=post_id).first()
-    if post is None:
+def apiUpdateProducts(product_id):
+    product = Product.query.filter_by(id=product_id).first()
+    if product is None:
         return {
             'status': 'not ok',
             'total_results': 0,
         }
-    if post.user_id != current_user.id:
-        return {
-            'status': 'error',
-            'message': 'this action cannot be completed'
-        }
-
     
     if request.method == "POST":
         data = request.json
-        title = data['title']
-        img_url = data['img_url']
-        caption = data['caption']
+        product_name = data['product_name']
+        image = data['image']
+        price = data['price']
+        description = data['description']
 
         # update the original post
-        post.title = title
-        post.image = img_url
-        post.caption = caption
+        product.product_name = product_name
+        product.image = image
+        product.description = description
+        product.price = price
 
         db.session.commit()   
 
         return {
             'status':'ok',
-            'message':'Your post has been updated',
-            'post':post.to_dict()
+            'message':'Your product has been updated',
+            'product':product.to_dict()
         }
 
+@shop.route('/api/products/delete/<int:product_id>', methods=["POST"])
+# @login_required
+def apideleteProduct(product_id):
+    product = Product.query.filter_by(id=product_id).first()
+    if product is None:
+        return {
+            'status': 'not ok',
+            'total_results': 0,
+        }
 
+    db.session.delete(product)
+    db.session.commit()
+               
+    return {
+        'status':'ok',
+        'message': 'this product has been deleted',
+        'product': product.to_dict()
 
+    }
 
+@shop.route('/api/create-product', methods=["POST"])
+#@login_required
+def apicreatePost():
+    if request.method == "POST":
+        data = request.json
+        product_name = data['product_name']
+        image = data['image']
+        description = data['description']
+        price = data['price']
 
+        product = Product(product_name, image, description, price)
 
+        db.session.add(product)
+        db.session.commit()   
 
-
-
-
+        return {
+            'status': 'ok',
+            'message': 'Successfully created a new product',
+            'product' : product.to_dict()
+        }
